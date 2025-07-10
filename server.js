@@ -7,10 +7,11 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
-
 import productRoutes from "./routes/products.js";
-import { sendWelcomeEmail } from "./controllers/emailController.js";
+import { sendWelcome } from "./controllers/emailController.js";
+import {sendWelcomeEmail} from "./controllers/emailController.js";
 import authMiddleware from "./middleware/authMiddleware.js";
+import User from "./models/User.js";
 
 // Load environment variables
 dotenv.config();
@@ -19,15 +20,18 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors({
-  origin: process.env.FRONTEND_URL,
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL,
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
 
 // DB Connection
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error(err));
 
@@ -39,14 +43,43 @@ passport.use(
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: `${process.env.BACKEND_URL}/auth/google/callback`,
     },
-    (accessToken, refreshToken, profile, done) => {
-      const user = {
-        id: profile.id,
-        name: profile.displayName,
-        email: profile.emails?.[0]?.value,
-        picture: profile.photos?.[0]?.value,
-      };
-      return done(null, user); // ✅ Pass the user to req.user
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        const existingUser = await User.findOne({ googleId: profile.id });
+
+        if (existingUser) {
+          return done(null, {
+            id: existingUser.googleId,
+            name: existingUser.name,
+            email: existingUser.email,
+            picture: existingUser.picture,
+          });
+        }
+
+        // 👤 New user: Save to DB
+        const newUser = await User.create({
+          googleId: profile.id,
+          name: profile.displayName,
+          email: profile.emails?.[0]?.value,
+          picture: profile.photos?.[0]?.value,
+        });
+
+        // 📧 Send welcome email
+        await sendWelcome({
+          email: newUser.email,
+          name: newUser.name || "Customer",
+        });
+
+        return done(null, {
+          id: newUser.googleId,
+          name: newUser.name,
+          email: newUser.email,
+          picture: newUser.picture,
+        });
+      } catch (err) {
+        console.error("❌ Error in Google OAuth:", err);
+        return done(err, null);
+      }
     }
   )
 );
@@ -54,11 +87,17 @@ passport.use(
 app.use(passport.initialize());
 
 // Routes
-app.get("/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+app.get(
+  "/auth/google",
+  passport.authenticate("google", { scope: ["profile", "email"] })
+);
 
 app.get(
   "/auth/google/callback",
-  passport.authenticate("google", { session: false, failureRedirect: "/login" }),
+  passport.authenticate("google", {
+    session: false,
+    failureRedirect: "/login",
+  }),
   (req, res) => {
     if (!req.user) {
       return res.redirect(`${process.env.FRONTEND_URL}/login`);
