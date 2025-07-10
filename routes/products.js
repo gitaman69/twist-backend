@@ -9,6 +9,7 @@ router.get("/", async (req, res) => {
     const products = await Product.find();
     res.json(products);
   } catch (err) {
+    console.error("❌ Error fetching products:", error);
     res.status(500).json({ error: "Server error" });
   }
 });
